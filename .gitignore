@@ -5,6 +5,10 @@
 .env.production
 .env.development
 
+# Google Play Service Account Keys (sensitive)
+*-billing-*.json
+google-play-service-account.json
+
 # Dependencies
 node_modules/
 npm-debug.log*
