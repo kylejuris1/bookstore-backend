@@ -8,7 +8,7 @@ dotenv.config();
 const router = Router();
 
 // Google Play Billing configuration
-const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || 'com.harba.bookstore.app';
+const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || 'com.bookstore.harba.app';
 const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY || '';
 
 // Credit packages configuration (matching Google Play product IDs)
