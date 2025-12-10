@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { google } from 'googleapis';
 import { supabaseAdmin } from '../config/supabase';
 import dotenv from 'dotenv';
-import path from 'path';
 
 dotenv.config();
 
@@ -10,16 +9,16 @@ const router = Router();
 
 // Google Play Billing configuration
 const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || 'com.harba.bookstore.app';
-const SERVICE_ACCOUNT_KEY_PATH = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY || '';
+const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY || '';
 
-// Credit packages configuration (matching Google Play product IDs and purchase option IDs)
+// Credit packages configuration (matching Google Play product IDs)
 export const CREDIT_PACKAGES = [
-  { id: '500', baseCredits: 500, bonusPercent: 0, totalCredits: 500, price: 4.99, productId: 'credits_500', purchaseOptionId: 'credits-500' },
-  { id: '1000', baseCredits: 1000, bonusPercent: 10, totalCredits: 1100, price: 9.99, productId: 'credits_1000', purchaseOptionId: 'credits-1000' },
-  { id: '2000', baseCredits: 2000, bonusPercent: 15, totalCredits: 2300, price: 19.99, productId: 'credits_2000', purchaseOptionId: 'credits-2000' },
-  { id: '3000', baseCredits: 3000, bonusPercent: 20, totalCredits: 3600, price: 29.99, productId: 'credits_3000', purchaseOptionId: 'credits-3000' },
-  { id: '5000', baseCredits: 5000, bonusPercent: 25, totalCredits: 6250, price: 49.99, productId: 'credits_5000', purchaseOptionId: 'credits-5000' },
-  { id: '10000', baseCredits: 10000, bonusPercent: 30, totalCredits: 13000, price: 99.99, productId: 'credits_10000', purchaseOptionId: 'credits-10000' },
+  { id: '500', baseCredits: 500, bonusPercent: 0, totalCredits: 500, price: 4.99, productId: 'credits_500' },
+  { id: '1000', baseCredits: 1000, bonusPercent: 10, totalCredits: 1100, price: 9.99, productId: 'credits_1000' },
+  { id: '2000', baseCredits: 2000, bonusPercent: 15, totalCredits: 2300, price: 19.99, productId: 'credits_2000' },
+  { id: '3000', baseCredits: 3000, bonusPercent: 20, totalCredits: 3600, price: 29.99, productId: 'credits_3000' },
+  { id: '5000', baseCredits: 5000, bonusPercent: 25, totalCredits: 6250, price: 49.99, productId: 'credits_5000' },
+  { id: '10000', baseCredits: 10000, bonusPercent: 30, totalCredits: 13000, price: 99.99, productId: 'credits_10000' },
 ];
 
 // Initialize Google Play Android Publisher API
@@ -31,18 +30,24 @@ const initGooglePlayAPI = () => {
   }
 
   try {
-    if (!SERVICE_ACCOUNT_KEY_PATH) {
+    if (!SERVICE_ACCOUNT_KEY) {
       console.warn('Google Play service account key not configured. Purchase verification will fail.');
       return null;
     }
 
-    // Resolve the path (could be absolute or relative)
-    const keyPath = path.isAbsolute(SERVICE_ACCOUNT_KEY_PATH)
-      ? SERVICE_ACCOUNT_KEY_PATH
-      : path.join(process.cwd(), SERVICE_ACCOUNT_KEY_PATH);
+    let keyJson: any;
+    try {
+      keyJson = JSON.parse(SERVICE_ACCOUNT_KEY);
+    } catch (parseError) {
+      console.error('Invalid GOOGLE_PLAY_SERVICE_ACCOUNT_KEY JSON:', parseError);
+      return null;
+    }
 
     const auth = new google.auth.GoogleAuth({
-      keyFile: keyPath,
+      credentials: {
+        client_email: keyJson.client_email,
+        private_key: keyJson.private_key?.replace(/\\n/g, '\n'),
+      },
       scopes: ['https://www.googleapis.com/auth/androidpublisher'],
     });
 
@@ -64,18 +69,18 @@ router.get('/packages', (req, res) => {
 // Verify Google Play purchase and add credits
 router.post('/verify-purchase', async (req, res) => {
   try {
-    const { purchaseToken, productId, purchaseOptionId, userId } = req.body;
+    const { purchaseToken, productId, userId } = req.body;
 
-    if (!purchaseToken || !userId) {
-      return res.status(400).json({ error: 'Purchase token and user ID are required' });
+    if (!purchaseToken || !userId || !productId) {
+      return res.status(400).json({ error: 'Purchase token, product ID, and user ID are required' });
     }
 
-    // Find the package using either Product ID or Purchase Option ID
+    // Find the package using Product ID
     const packageData = CREDIT_PACKAGES.find(
-      pkg => pkg.productId === productId || pkg.purchaseOptionId === purchaseOptionId || pkg.purchaseOptionId === productId
+      pkg => pkg.productId === productId
     );
     if (!packageData) {
-      return res.status(400).json({ error: 'Invalid product ID or purchase option ID' });
+      return res.status(400).json({ error: 'Invalid product ID' });
     }
 
     // Initialize Google Play API
@@ -84,14 +89,12 @@ router.post('/verify-purchase', async (req, res) => {
       return res.status(500).json({ error: 'Google Play API not configured. Please set GOOGLE_PLAY_SERVICE_ACCOUNT_KEY environment variable.' });
     }
 
-    // Verify purchase with Google Play
-    // Use Purchase Option ID if provided, otherwise fall back to Product ID
-    const verifyProductId = purchaseOptionId || productId || packageData.purchaseOptionId;
+    // Verify purchase with Google Play using Product ID
     let purchase;
     try {
       const response = await publisher.purchases.products.get({
         packageName: PACKAGE_NAME,
-        productId: verifyProductId, // Google Play API expects the Purchase Option ID for verification
+        productId: productId, // Use Product ID for verification
         token: purchaseToken,
       });
       purchase = response.data;
@@ -127,7 +130,7 @@ router.post('/verify-purchase', async (req, res) => {
     try {
       await publisher.purchases.products.acknowledge({
         packageName: PACKAGE_NAME,
-        productId: verifyProductId, // Use the same ID used for verification
+        productId: productId, // Use Product ID for acknowledgment
         token: purchaseToken,
         requestBody: {},
       });
