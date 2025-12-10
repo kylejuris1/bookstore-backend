@@ -102,6 +102,49 @@ router.post("/create-checkout-session", async (req, res) => {
   }
 })
 
+// Create a PaymentIntent for Stripe PaymentSheet
+router.post("/create-payment-intent", async (req, res) => {
+  try {
+    const { productId, userId } = req.body as { productId?: string; userId?: string }
+
+    if (!productId || !userId) {
+      return res
+        .status(400)
+        .json({ error: "Product ID and user ID are required to create a payment intent" })
+    }
+
+    const packageData = CREDIT_PACKAGES.find((pkg) => pkg.productId === productId)
+    if (!packageData) {
+      return res.status(400).json({ error: "Invalid product ID" })
+    }
+
+    const stripeClient = ensureStripe()
+    const amount = Math.round(packageData.price * 100)
+
+    const paymentIntent = await stripeClient.paymentIntents.create({
+      amount,
+      currency: "usd",
+      automatic_payment_methods: { enabled: true },
+      metadata: {
+        userId,
+        productId,
+        credits: packageData.totalCredits.toString(),
+      },
+      description: `Credits package ${packageData.id}`,
+    })
+
+    return res.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+    })
+  } catch (error: any) {
+    console.error("Error creating payment intent:", error)
+    return res
+      .status(500)
+      .json({ error: error?.message || "Failed to create payment intent" })
+  }
+})
+
 // Verify Stripe Checkout Session (or PaymentIntent fallback) and add credits
 router.post("/verify-purchase", async (req, res) => {
   try {
