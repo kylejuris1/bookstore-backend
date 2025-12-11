@@ -12,7 +12,23 @@ const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || 'com.bookstore.harb
 const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY || '';
 
 // Credit packages configuration (matching Google Play product IDs)
+// Notes:
+// - oneTime: true means the package can only be purchased once per user
+// - isConsumable: false means we should not consume the purchase client-side
+// - highlight: true surfaces a limited/special offer in the UI
 export const CREDIT_PACKAGES = [
+  {
+    id: '200',
+    baseCredits: 200,
+    bonusPercent: 0,
+    totalCredits: 200,
+    price: 1.99,
+    productId: 'credits_200',
+    oneTime: true,
+    isConsumable: false,
+    highlight: true,
+    tagline: 'Limited one-time starter boost',
+  },
   { id: '500', baseCredits: 500, bonusPercent: 0, totalCredits: 500, price: 4.99, productId: 'credits_500' },
   { id: '1000', baseCredits: 1000, bonusPercent: 10, totalCredits: 1100, price: 9.99, productId: 'credits_1000' },
   { id: '2000', baseCredits: 2000, bonusPercent: 15, totalCredits: 2300, price: 19.99, productId: 'credits_2000' },
@@ -60,10 +76,56 @@ const initGooglePlayAPI = () => {
 };
 
 // Get available credit packages
-router.get('/packages', (req, res) => {
-  // Return packages without productId (frontend already has it)
-  const packagesWithoutProductId = CREDIT_PACKAGES.map(({ productId, ...rest }) => rest);
-  res.json(packagesWithoutProductId);
+router.get('/packages', async (req, res) => {
+  try {
+    const userId = (req.query.userId as string) || null;
+    let availablePackages = CREDIT_PACKAGES;
+
+    // If a userId is provided, filter one-time packages that were already purchased
+    if (userId) {
+      const { data: userData, error } = await supabaseAdmin
+        .from('users')
+        .select('settings')
+        .eq('id', userId)
+        .single();
+
+      if (error) {
+        console.error('Failed to load user settings for packages:', error);
+        return res.status(500).json({ error: 'Failed to load packages' });
+      }
+
+      let userSettings: any = {};
+      if (userData?.settings) {
+        try {
+          userSettings = typeof userData.settings === 'string'
+            ? JSON.parse(userData.settings)
+            : userData.settings;
+        } catch (parseError) {
+          console.error('Failed to parse user settings JSON:', parseError);
+          userSettings = {};
+        }
+      }
+
+      const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+        ? userSettings.purchasedProducts
+        : [];
+      const purchasedSet = new Set(purchasedProducts);
+
+      availablePackages = CREDIT_PACKAGES.filter(pkg => {
+        if (pkg.oneTime && purchasedSet.has(pkg.productId)) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    // Return packages without productId (frontend already has it)
+    const packagesWithoutProductId = availablePackages.map(({ productId, ...rest }) => rest);
+    res.json(packagesWithoutProductId);
+  } catch (error) {
+    console.error('Error returning packages:', error);
+    res.status(500).json({ error: 'Failed to load packages' });
+  }
 });
 
 // Verify Google Play purchase and add credits
@@ -142,7 +204,7 @@ router.post('/verify-purchase', async (req, res) => {
     // Get current credits
     const { data: userData, error: fetchError } = await supabaseAdmin
       .from('users')
-      .select('number_of_credits')
+      .select('number_of_credits, settings')
       .eq('id', userId)
       .single();
 
@@ -150,14 +212,44 @@ router.post('/verify-purchase', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch user data' });
     }
 
+    let userSettings: any = {};
+    if (userData?.settings) {
+      try {
+        userSettings = typeof userData.settings === 'string'
+          ? JSON.parse(userData.settings)
+          : userData.settings;
+      } catch (parseError) {
+        console.error('Failed to parse user settings JSON:', parseError);
+        userSettings = {};
+      }
+    }
+
+    const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+      ? userSettings.purchasedProducts
+      : [];
+    const purchasedSet = new Set<string>(purchasedProducts);
+
+    if (packageData.oneTime && purchasedSet.has(productId)) {
+      return res.status(400).json({ error: 'Product already purchased' });
+    }
+
     const currentCredits = userData?.number_of_credits || 0;
     const creditsToAdd = packageData.totalCredits;
     const newCredits = currentCredits + creditsToAdd;
 
+    if (packageData.oneTime) {
+      purchasedSet.add(productId);
+    }
+
+    const updatedSettings = {
+      ...userSettings,
+      purchasedProducts: Array.from(purchasedSet),
+    };
+
     // Update user credits
     const { error: updateError } = await supabaseAdmin
       .from('users')
-      .update({ number_of_credits: newCredits })
+      .update({ number_of_credits: newCredits, settings: updatedSettings })
       .eq('id', userId);
 
     if (updateError) {
@@ -170,6 +262,7 @@ router.post('/verify-purchase', async (req, res) => {
       success: true,
       creditsAdded: creditsToAdd,
       newTotal: newCredits,
+      purchasedProducts: Array.from(purchasedSet),
     });
   } catch (error: any) {
     console.error('Error verifying purchase:', error);

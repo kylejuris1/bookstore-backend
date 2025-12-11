@@ -42,5 +42,40 @@ router.get('/:bookId', async (req, res) => {
   }
 });
 
+// Log a view for a book
+router.post('/:bookId/view', async (req, res) => {
+  try {
+    const { bookId } = req.params;
+
+    // Fetch current views
+    const { data, error } = await supabaseAdmin
+      .from('books')
+      .select('views')
+      .eq('book_id', bookId)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ error: 'Book not found' });
+    }
+
+    const currentViews = data.views || 0;
+    const newViews = currentViews + 1;
+
+    const { error: updateError } = await supabaseAdmin
+      .from('books')
+      .update({ views: newViews })
+      .eq('book_id', bookId);
+
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to log view' });
+    }
+
+    res.json({ success: true, views: newViews });
+  } catch (error) {
+    console.error('Error logging view:', error);
+    res.status(500).json({ error: 'Failed to log view' });
+  }
+});
+
 export default router;
 
