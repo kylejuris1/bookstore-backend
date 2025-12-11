@@ -201,15 +201,49 @@ router.post('/verify-purchase', async (req, res) => {
       // Continue even if acknowledgment fails - the purchase is still valid
     }
 
-    // Get current credits
-    const { data: userData, error: fetchError } = await supabaseAdmin
-      .from('users')
-      .select('number_of_credits, settings')
-      .eq('id', userId)
-      .single();
+    // Ensure user exists and get current credits
+    const ensureUserRow = async () => {
+      const { data, error } = await supabaseAdmin
+        .from('users')
+        .select('number_of_credits, settings')
+        .eq('id', userId)
+        .single();
 
-    if (fetchError) {
-      return res.status(500).json({ error: 'Failed to fetch user data' });
+      if (error) {
+        // If not found, create a guest profile on the fly
+        if ((error as any).code === 'PGRST116') {
+          const { data: created, error: createError } = await supabaseAdmin
+            .from('users')
+            .upsert(
+              {
+                id: userId,
+                authid: userId,
+                email: '',
+                number_of_credits: 0,
+                bookmarks: [],
+                settings: {},
+                paid_chapters: [],
+              },
+              { onConflict: 'id' }
+            )
+            .select('number_of_credits, settings')
+            .single();
+
+          if (createError) {
+            console.error('Failed to create user during purchase:', createError);
+            return { error: createError };
+          }
+          return { data: created };
+        }
+        return { error };
+      }
+
+      return { data };
+    };
+
+    const { data: userData, error: ensureError } = await ensureUserRow();
+    if (ensureError || !userData) {
+      return res.status(500).json({ error: 'Failed to fetch or create user for purchase' });
     }
 
     let userSettings: any = {};

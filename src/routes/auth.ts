@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '../config/supabase';
 
 const router = Router();
@@ -117,4 +118,39 @@ router.get('/me', async (req, res) => {
 });
 
 export default router;
+
+// Guest user creation
+router.post('/guest', async (req, res) => {
+  try {
+    const providedId = req.body?.guestId as string | undefined;
+    const guestId = providedId || randomUUID();
+
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .upsert(
+        {
+          id: guestId,
+          authid: guestId,
+          email: '',
+          number_of_credits: 0,
+          bookmarks: [],
+          settings: {},
+          paid_chapters: [],
+        },
+        { onConflict: 'id' }
+      )
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('Failed to create guest user:', error);
+      return res.status(500).json({ error: 'Failed to create guest user' });
+    }
+
+    res.json({ guestId: data?.id || guestId });
+  } catch (err) {
+    console.error('Unexpected error creating guest user:', err);
+    res.status(500).json({ error: 'Failed to create guest user' });
+  }
+});
 
