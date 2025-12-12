@@ -1,258 +1,455 @@
-import { Router } from "express"
-import Stripe from "stripe"
-import { supabaseAdmin } from "../config/supabase"
-import dotenv from "dotenv"
+import { Router } from 'express';
+import Stripe from 'stripe';
+import { supabaseAdmin } from '../config/supabase';
+import dotenv from 'dotenv';
 
-dotenv.config()
+dotenv.config();
 
-const router = Router()
+const router = Router();
 
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_API_KEY || ""
-const stripe = STRIPE_SECRET_KEY
-  ? new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" })
-  : null
+const stripeSecret = process.env.STRIPE_SECRET_KEY;
+const stripe = stripeSecret
+  ? new Stripe(stripeSecret, {
+      apiVersion: '2024-12-18' as any,
+    })
+  : null;
 
-const ensureStripe = () => {
-  if (!stripe) {
-    throw new Error(
-      "Stripe secret key not configured. Set STRIPE_SECRET_KEY in the environment."
-    )
+type CreditPackage = {
+  id: string;
+  baseCredits: number;
+  bonusPercent: number;
+  totalCredits: number;
+  price: number;
+  productId: string; // logical product id used for one-time gating
+  priceId?: string; // Stripe price id
+  oneTime?: boolean;
+  highlight?: boolean;
+  tagline?: string;
+};
+
+// Credit packages mapped to Stripe price IDs (productId kept for backwards compatibility)
+export const CREDIT_PACKAGES: CreditPackage[] = [
+  {
+    id: '200',
+    baseCredits: 200,
+    bonusPercent: 200,
+    totalCredits: 600,
+    price: 1.99,
+    productId: 'credits_200',
+    priceId: process.env.STRIPE_PRICE_CREDITS_200 || 'price_1SdL8TGsleA9N3woLQDaF6tM',
+    oneTime: true,
+    highlight: true,
+    tagline: 'Limited one-time starter boost',
+  },
+];
+
+const findPackageById = (id: string) => CREDIT_PACKAGES.find((pkg) => pkg.id === id);
+
+const ensureAccount = async (userId: string) => {
+  const baseProfile = {
+    id: userId,
+    email: null,
+    number_of_credits: 0,
+    bookmarks: [],
+    settings: {},
+    paid_chapters: [],
+  };
+
+  const fetchFrom = async (table: 'users' | 'guests') => {
+    return supabaseAdmin
+      .from(table)
+      .select('number_of_credits, settings')
+      .eq('id', userId)
+      .maybeSingle();
+  };
+
+  let found = await fetchFrom('users');
+  if (found.data) return { table: 'users' as const, data: found.data };
+
+  found = await fetchFrom('guests');
+  if (found.data) return { table: 'guests' as const, data: found.data };
+
+  const created = await supabaseAdmin
+    .from('guests')
+    .upsert(baseProfile, { onConflict: 'id' })
+    .select('number_of_credits, settings')
+    .single();
+
+  if (created.error || !created.data) {
+    console.error('Failed to fetch or create account for purchase:', created.error);
+    return { error: created.error };
   }
-  return stripe
-}
 
-// Credit packages configuration (matching Stripe product IDs)
-export const CREDIT_PACKAGES = [
-  { id: "500", baseCredits: 500, bonusPercent: 0, totalCredits: 500, price: 4.99, productId: "credits_500" },
-  { id: "1000", baseCredits: 1000, bonusPercent: 10, totalCredits: 1100, price: 9.99, productId: "credits_1000" },
-  { id: "2000", baseCredits: 2000, bonusPercent: 15, totalCredits: 2300, price: 19.99, productId: "credits_2000" },
-  { id: "3000", baseCredits: 3000, bonusPercent: 20, totalCredits: 3600, price: 29.99, productId: "credits_3000" },
-  { id: "5000", baseCredits: 5000, bonusPercent: 25, totalCredits: 6250, price: 49.99, productId: "credits_5000" },
-  { id: "10000", baseCredits: 10000, bonusPercent: 30, totalCredits: 13000, price: 99.99, productId: "credits_10000" },
-]
+  return { table: 'guests' as const, data: created.data };
+};
 
-// Get available credit packages
-router.get("/packages", (_req, res) => {
-  // Return packages without productId (frontend already has it)
-  const packagesWithoutProductId = CREDIT_PACKAGES.map(({ productId, ...rest }) => rest)
-  res.json(packagesWithoutProductId)
-})
-
-// Create a Stripe Checkout Session for the selected package
-router.post("/create-checkout-session", async (req, res) => {
+const parseSettings = (rawSettings: any) => {
+  if (!rawSettings) return {};
   try {
-    const { productId, userId } = req.body as { productId?: string; userId?: string }
+    return typeof rawSettings === 'string' ? JSON.parse(rawSettings) : rawSettings;
+  } catch (err) {
+    console.error('Failed to parse settings JSON:', err);
+    return {};
+  }
+};
 
-    if (!productId || !userId) {
-      return res
-        .status(400)
-        .json({ error: "Product ID and user ID are required to create a checkout session" })
+// Get available credit packages, filtering one-time packs already owned
+router.get('/packages', async (req, res) => {
+  try {
+    const userId = (req.query.userId as string) || null;
+    let availablePackages = CREDIT_PACKAGES;
+
+    if (userId) {
+      const fetched = await ensureAccount(userId);
+      if ((fetched as any).error) {
+        return res.status(500).json({ error: 'Failed to load packages' });
+      }
+
+      const userSettings = parseSettings((fetched as any).data?.settings);
+      const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+        ? userSettings.purchasedProducts
+        : [];
+      const purchasedSet = new Set(purchasedProducts);
+
+      availablePackages = CREDIT_PACKAGES.filter((pkg) => {
+        if (pkg.oneTime && purchasedSet.has(pkg.productId)) {
+          return false;
+        }
+        return true;
+      });
     }
 
-    const packageData = CREDIT_PACKAGES.find((pkg) => pkg.productId === productId)
-    if (!packageData) {
-      return res.status(400).json({ error: "Invalid product ID" })
+    res.json(
+      availablePackages.map(({ priceId, ...rest }) => ({
+        ...rest,
+        priceId,
+      })),
+    );
+  } catch (error) {
+    console.error('Error returning packages:', error);
+    res.status(500).json({ error: 'Failed to load packages' });
+  }
+});
+
+// Create Stripe Checkout session for a credit package
+router.post('/stripe/checkout', async (req, res) => {
+  try {
+    const { packageId, userId, successUrl, cancelUrl } = req.body as {
+      packageId?: string;
+      userId?: string;
+      successUrl?: string;
+      cancelUrl?: string;
+    };
+
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe is not configured on the server.' });
     }
 
-    const stripeClient = ensureStripe()
-    const amount = Math.round(packageData.price * 100)
+    if (!packageId || !userId) {
+      return res.status(400).json({ error: 'packageId and userId are required' });
+    }
 
-    const successUrl =
-      process.env.CHECKOUT_SUCCESS_URL ||
-      "bookstore://checkout-success?session_id={CHECKOUT_SESSION_ID}"
-    const cancelUrl =
-      process.env.CHECKOUT_CANCEL_URL || "bookstore://checkout-cancelled"
+    const packageData = findPackageById(packageId);
+    if (!packageData || !packageData.priceId) {
+      return res.status(400).json({ error: 'Invalid or unavailable package' });
+    }
 
-    const session = await stripeClient.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
+    const ensured = await ensureAccount(userId);
+    if ((ensured as any).error || !ensured.data) {
+      return res.status(500).json({ error: 'Failed to fetch or create account for purchase' });
+    }
+
+    const userSettings = parseSettings(ensured.data.settings);
+    const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+      ? userSettings.purchasedProducts
+      : [];
+
+    if (packageData.oneTime && purchasedProducts.includes(packageData.productId)) {
+      return res.status(400).json({ error: 'Product already purchased' });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
       line_items: [
         {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: `Credits package ${packageData.id}`,
-              metadata: {
-                productId,
-              },
-            },
-            unit_amount: amount,
-          },
+          price: packageData.priceId,
           quantity: 1,
         },
       ],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
+      client_reference_id: userId,
       metadata: {
         userId,
-        productId,
-        credits: packageData.totalCredits.toString(),
+        packageId: packageData.id,
+        productId: packageData.productId,
       },
-    })
+      success_url: successUrl || 'https://example.com/stripe/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: cancelUrl || 'https://example.com/stripe/cancelled',
+    });
 
-    return res.json({
-      url: session.url,
+    res.json({
+      checkoutUrl: session.url,
       sessionId: session.id,
-    })
+    });
   } catch (error: any) {
-    console.error("Error creating checkout session:", error)
-    return res
-      .status(500)
-      .json({ error: error?.message || "Failed to create checkout session" })
+    console.error('Error creating Stripe Checkout session:', error);
+    res.status(500).json({ error: error.message || 'Failed to start checkout' });
   }
-})
+});
 
-// Create a PaymentIntent for Stripe PaymentSheet
-router.post("/create-payment-intent", async (req, res) => {
+// Create a PaymentIntent for Stripe Payment Sheet (mobile)
+router.post('/stripe/payment-sheet', async (req, res) => {
   try {
-    const { productId, userId } = req.body as { productId?: string; userId?: string }
+    const { packageId, userId } = req.body as { packageId?: string; userId?: string };
 
-    if (!productId || !userId) {
-      return res
-        .status(400)
-        .json({ error: "Product ID and user ID are required to create a payment intent" })
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe is not configured on the server.' });
     }
 
-    const packageData = CREDIT_PACKAGES.find((pkg) => pkg.productId === productId)
-    if (!packageData) {
-      return res.status(400).json({ error: "Invalid product ID" })
+    if (!packageId || !userId) {
+      return res.status(400).json({ error: 'packageId and userId are required' });
     }
 
-    const stripeClient = ensureStripe()
-    const amount = Math.round(packageData.price * 100)
+    const packageData = findPackageById(packageId);
+    if (!packageData || !packageData.priceId) {
+      return res.status(400).json({ error: 'Invalid or unavailable package' });
+    }
 
-    const paymentIntent = await stripeClient.paymentIntents.create({
+    const ensured = await ensureAccount(userId);
+    if ((ensured as any).error || !ensured.data) {
+      return res.status(500).json({ error: 'Failed to fetch or create account for purchase' });
+    }
+
+    const userSettings = parseSettings(ensured.data.settings);
+    const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+      ? userSettings.purchasedProducts
+      : [];
+
+    if (packageData.oneTime && purchasedProducts.includes(packageData.productId)) {
+      return res.status(400).json({ error: 'Product already purchased' });
+    }
+
+    // Retrieve the price so amount/currency stays in sync with Stripe dashboard
+    const price = await stripe.prices.retrieve(packageData.priceId);
+    const amount = typeof price.unit_amount === 'number' ? price.unit_amount : Math.round(packageData.price * 100);
+    const currency = price.currency || 'usd';
+
+    const paymentIntent = await stripe.paymentIntents.create({
       amount,
-      currency: "usd",
-      automatic_payment_methods: { enabled: true },
+      currency,
       metadata: {
         userId,
-        productId,
-        credits: packageData.totalCredits.toString(),
+        packageId: packageData.id,
+        productId: packageData.productId,
       },
-      description: `Credits package ${packageData.id}`,
-    })
+    });
 
-    return res.json({
+    res.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
-    })
+    });
   } catch (error: any) {
-    console.error("Error creating payment intent:", error)
-    return res
-      .status(500)
-      .json({ error: error?.message || "Failed to create payment intent" })
+    console.error('Error creating PaymentIntent for Payment Sheet:', error);
+    res.status(500).json({ error: error.message || 'Failed to start payment sheet' });
   }
-})
+});
 
-// Verify Stripe Checkout Session (or PaymentIntent fallback) and add credits
-router.post("/verify-purchase", async (req, res) => {
+// Confirm PaymentIntent status and credit the user (Payment Sheet)
+router.post('/stripe/payment-sheet/confirm', async (req, res) => {
   try {
-    const { paymentIntentId, sessionId, userId, productId } = req.body as {
-      paymentIntentId?: string
-      sessionId?: string
-      userId?: string
-      productId?: string
+    const { paymentIntentId, userId } = req.body as { paymentIntentId?: string; userId?: string };
+
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe is not configured on the server.' });
     }
 
-    if ((!paymentIntentId && !sessionId) || !userId) {
-      return res
-        .status(400)
-        .json({ error: "Payment intent ID or session ID and user ID are required" })
+    if (!paymentIntentId || !userId) {
+      return res.status(400).json({ error: 'paymentIntentId and userId are required' });
     }
 
-    const stripeClient = ensureStripe()
-    let intentProductId: string | undefined = productId
-    let intentAmount: number | undefined
-    let intentUserId: string | undefined = userId
-
-    if (sessionId) {
-      const session = await stripeClient.checkout.sessions.retrieve(sessionId)
-      if (session.status !== "complete") {
-        return res.status(400).json({ error: "Checkout session not completed yet" })
-      }
-      intentProductId =
-        (session.metadata?.productId as string | undefined) || intentProductId
-      intentUserId = (session.metadata?.userId as string | undefined) || intentUserId
-      intentAmount = session.amount_total || undefined
-      if (session.payment_intent && typeof session.payment_intent === "string") {
-        // Fetch intent for additional validation
-        const intent = await stripeClient.paymentIntents.retrieve(session.payment_intent)
-        intentAmount = intent.amount
-        intentProductId =
-          (intent.metadata?.productId as string | undefined) || intentProductId
-        intentUserId = (intent.metadata?.userId as string | undefined) || intentUserId
-      }
-    } else if (paymentIntentId) {
-      const intent = await stripeClient.paymentIntents.retrieve(paymentIntentId)
-      if (intent.status !== "succeeded") {
-        return res.status(400).json({ error: "Payment has not succeeded yet" })
-      }
-      intentProductId =
-        (intent.metadata?.productId as string | undefined) || intentProductId
-      intentUserId = (intent.metadata?.userId as string | undefined) || intentUserId
-      intentAmount = intent.amount
+    const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (!intent) {
+      return res.status(404).json({ error: 'PaymentIntent not found' });
     }
 
-    if (!intentProductId) {
-      return res.status(400).json({ error: "Product ID missing on payment" })
+    if (intent.status !== 'succeeded' && intent.status !== 'requires_capture') {
+      return res.status(400).json({ error: 'Payment not completed yet' });
+    }
+
+    const metadata = intent.metadata || {};
+    const packageId = metadata.packageId;
+    const productId = metadata.productId;
+    const intentUserId = metadata.userId;
+
+    if (!packageId || !productId) {
+      return res.status(400).json({ error: 'Missing package metadata on intent' });
     }
 
     if (intentUserId && intentUserId !== userId) {
-      return res
-        .status(400)
-        .json({ error: "Payment does not belong to this user" })
+      return res.status(400).json({ error: 'PaymentIntent does not belong to this user' });
     }
 
-    const packageData = CREDIT_PACKAGES.find((pkg) => pkg.productId === intentProductId)
+    const packageData = findPackageById(packageId);
     if (!packageData) {
-      return res.status(400).json({ error: "Invalid product ID on payment" })
+      return res.status(400).json({ error: 'Package not found' });
     }
 
-    // Validate amount to prevent tampering
-    const expectedAmount = Math.round(packageData.price * 100)
-    if (intentAmount && intentAmount !== expectedAmount) {
-      return res.status(400).json({ error: "Payment amount does not match product price" })
+    const ensured = await ensureAccount(userId);
+    if ((ensured as any).error || !ensured.data) {
+      return res.status(500).json({ error: 'Failed to fetch or create account for purchase' });
     }
 
-    // Get current credits
-    const { data: userData, error: fetchError } = await supabaseAdmin
-      .from("users")
-      .select("number_of_credits")
-      .eq("id", userId)
-      .single()
+    const accountTable = ensured.table;
+    const userData = ensured.data;
+    const userSettings = parseSettings(userData.settings);
+    const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+      ? userSettings.purchasedProducts
+      : [];
+    const purchasedSet = new Set<string>(purchasedProducts);
 
-    if (fetchError) {
-      return res.status(500).json({ error: "Failed to fetch user data" })
+    if (packageData.oneTime && purchasedSet.has(productId)) {
+      return res.json({
+        success: true,
+        creditsAdded: 0,
+        newTotal: userData.number_of_credits || 0,
+        purchasedProducts: Array.from(purchasedSet),
+        message: 'Product already purchased',
+      });
     }
 
-    const currentCredits = userData?.number_of_credits || 0
-    const creditsToAdd = packageData.totalCredits
-    const newCredits = currentCredits + creditsToAdd
+    const currentCredits = userData?.number_of_credits || 0;
+    const creditsToAdd = packageData.totalCredits;
+    const newCredits = currentCredits + creditsToAdd;
 
-    // Update user credits
+    if (packageData.oneTime) {
+      purchasedSet.add(productId);
+    }
+
+    const updatedSettings = {
+      ...userSettings,
+      purchasedProducts: Array.from(purchasedSet),
+    };
+
     const { error: updateError } = await supabaseAdmin
-      .from("users")
-      .update({ number_of_credits: newCredits })
-      .eq("id", userId)
+      .from(accountTable)
+      .update({ number_of_credits: newCredits, settings: updatedSettings })
+      .eq('id', userId);
 
     if (updateError) {
-      return res.status(500).json({ error: "Failed to update credits" })
+      return res.status(500).json({ error: 'Failed to update credits' });
     }
-
-    console.log(
-      `Credits added via Stripe Checkout: ${creditsToAdd} to user ${userId}. New total: ${newCredits}`
-    )
 
     res.json({
       success: true,
       creditsAdded: creditsToAdd,
       newTotal: newCredits,
-    })
+      purchasedProducts: Array.from(purchasedSet),
+    });
   } catch (error: any) {
-    console.error("Error verifying Stripe purchase:", error)
-    res.status(500).json({ error: error?.message || "Failed to verify purchase" })
+    console.error('Error confirming PaymentIntent:', error);
+    res.status(500).json({ error: error.message || 'Failed to confirm PaymentIntent' });
   }
-})
+});
 
-export default router
+// Confirm Checkout session status and credit the user
+router.post('/stripe/confirm', async (req, res) => {
+  try {
+    const { sessionId, userId } = req.body as { sessionId?: string; userId?: string };
+
+    if (!stripe) {
+      return res.status(500).json({ error: 'Stripe is not configured on the server.' });
+    }
+
+    if (!sessionId || !userId) {
+      return res.status(400).json({ error: 'sessionId and userId are required' });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['payment_intent'],
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Checkout session not found' });
+    }
+
+    // Only proceed for paid/complete sessions
+    if (session.payment_status !== 'paid' && session.status !== 'complete') {
+      return res.status(400).json({ error: 'Payment not completed yet' });
+    }
+
+    const metadata = session.metadata || {};
+    const packageId = metadata.packageId;
+    const productId = metadata.productId;
+    const sessionUserId = metadata.userId || session.client_reference_id;
+
+    if (!packageId || !productId) {
+      return res.status(400).json({ error: 'Missing package metadata on session' });
+    }
+
+    if (sessionUserId && sessionUserId !== userId) {
+      return res.status(400).json({ error: 'Session does not belong to this user' });
+    }
+
+    const packageData = findPackageById(packageId);
+    if (!packageData) {
+      return res.status(400).json({ error: 'Package not found' });
+    }
+
+    const ensured = await ensureAccount(userId);
+    if ((ensured as any).error || !ensured.data) {
+      return res.status(500).json({ error: 'Failed to fetch or create account for purchase' });
+    }
+
+    const accountTable = ensured.table;
+    const userData = ensured.data;
+    const userSettings = parseSettings(userData.settings);
+    const purchasedProducts = Array.isArray(userSettings?.purchasedProducts)
+      ? userSettings.purchasedProducts
+      : [];
+    const purchasedSet = new Set<string>(purchasedProducts);
+
+    // Idempotency: if already purchased and one-time, return current state
+    if (packageData.oneTime && purchasedSet.has(productId)) {
+      return res.json({
+        success: true,
+        creditsAdded: 0,
+        newTotal: userData.number_of_credits || 0,
+        purchasedProducts: Array.from(purchasedSet),
+        message: 'Product already purchased',
+      });
+    }
+
+    const currentCredits = userData?.number_of_credits || 0;
+    const creditsToAdd = packageData.totalCredits;
+    const newCredits = currentCredits + creditsToAdd;
+
+    if (packageData.oneTime) {
+      purchasedSet.add(productId);
+    }
+
+    const updatedSettings = {
+      ...userSettings,
+      purchasedProducts: Array.from(purchasedSet),
+    };
+
+    const { error: updateError } = await supabaseAdmin
+      .from(accountTable)
+      .update({ number_of_credits: newCredits, settings: updatedSettings })
+      .eq('id', userId);
+
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to update credits' });
+    }
+
+    res.json({
+      success: true,
+      creditsAdded: creditsToAdd,
+      newTotal: newCredits,
+      purchasedProducts: Array.from(purchasedSet),
+    });
+  } catch (error: any) {
+    console.error('Error confirming Stripe checkout:', error);
+    res.status(500).json({ error: error.message || 'Failed to confirm checkout' });
+  }
+});
+
+export default router;
