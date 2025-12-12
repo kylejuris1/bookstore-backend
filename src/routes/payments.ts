@@ -201,44 +201,41 @@ router.post('/verify-purchase', async (req, res) => {
       // Continue even if acknowledgment fails - the purchase is still valid
     }
 
-    // Ensure user exists and get current credits
+    // Ensure user exists and get current credits (create if missing or on error)
     const ensureUserRow = async () => {
-      const { data, error } = await supabaseAdmin
+      const baseProfile = {
+        id: userId,
+        authid: userId,
+        email: '',
+        number_of_credits: 0,
+        bookmarks: [],
+        settings: {},
+        paid_chapters: [],
+      };
+
+      const selectUser = await supabaseAdmin
         .from('users')
         .select('number_of_credits, settings')
         .eq('id', userId)
         .single();
 
-      if (error) {
-        // If not found, create a guest profile on the fly
-        if ((error as any).code === 'PGRST116') {
-          const { data: created, error: createError } = await supabaseAdmin
-            .from('users')
-            .upsert(
-              {
-                id: userId,
-                authid: userId,
-                email: '',
-                number_of_credits: 0,
-                bookmarks: [],
-                settings: {},
-                paid_chapters: [],
-              },
-              { onConflict: 'id' }
-            )
-            .select('number_of_credits, settings')
-            .single();
-
-          if (createError) {
-            console.error('Failed to create user during purchase:', createError);
-            return { error: createError };
-          }
-          return { data: created };
-        }
-        return { error };
+      if (selectUser.data) {
+        return { data: selectUser.data };
       }
 
-      return { data };
+      // If missing or errored, try to upsert
+      const upsert = await supabaseAdmin
+        .from('users')
+        .upsert(baseProfile, { onConflict: 'id' })
+        .select('number_of_credits, settings')
+        .single();
+
+      if (upsert.error || !upsert.data) {
+        console.error('Failed to fetch or create user for purchase:', selectUser.error || upsert.error);
+        return { error: upsert.error || selectUser.error };
+      }
+
+      return { data: upsert.data };
     };
 
     const { data: userData, error: ensureError } = await ensureUserRow();

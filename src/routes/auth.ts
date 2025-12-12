@@ -123,7 +123,7 @@ export default router;
 router.post('/guest', async (req, res) => {
   try {
     const providedId = req.body?.guestId as string | undefined;
-    const guestId = providedId || randomUUID();
+    const guestId = providedId || `guest_${randomUUID()}`;
 
     const { data, error } = await supabaseAdmin
       .from('users')
@@ -134,7 +134,7 @@ router.post('/guest', async (req, res) => {
           email: '',
           number_of_credits: 0,
           bookmarks: [],
-          settings: {},
+          settings: { isGuest: true },
           paid_chapters: [],
         },
         { onConflict: 'id' }
@@ -147,6 +147,7 @@ router.post('/guest', async (req, res) => {
       return res.status(500).json({ error: 'Failed to create guest user' });
     }
 
+    console.log(`Guest created/upserted: ${data?.id || guestId}`);
     res.json({ guestId: data?.id || guestId });
   } catch (err) {
     console.error('Unexpected error creating guest user:', err);
