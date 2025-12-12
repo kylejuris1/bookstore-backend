@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../config/supabase';
+import { randomUUID } from 'crypto';
 
 const router = Router();
 
@@ -113,6 +114,41 @@ router.get('/me', async (req, res) => {
     res.json({ user, profile });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get user' });
+  }
+});
+
+// Create or reuse a guest user (no email required)
+router.post('/guest', async (req, res) => {
+  try {
+    const { guestId } = req.body as { guestId?: string };
+    const id = guestId && typeof guestId === 'string' ? guestId : randomUUID();
+
+    // Upsert guest record with defaults
+    const { data, error } = await supabaseAdmin
+      .from('guests')
+      .upsert(
+        {
+          id,
+          email: null,
+          number_of_credits: 0,
+          bookmarks: [],
+          settings: {},
+          paid_chapters: [],
+        },
+        { onConflict: 'id' }
+      )
+      .select('id')
+      .single();
+
+    if (error || !data) {
+      console.error('Failed to create or fetch guest:', error);
+      return res.status(500).json({ error: 'Failed to create guest' });
+    }
+
+    res.json({ guestId: data.id });
+  } catch (err: any) {
+    console.error('Guest creation error:', err);
+    res.status(500).json({ error: 'Failed to create guest' });
   }
 });
 
