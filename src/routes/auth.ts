@@ -123,7 +123,8 @@ export default router;
 router.post('/guest', async (req, res) => {
   try {
     const providedId = req.body?.guestId as string | undefined;
-    const guestId = providedId || `guest_${randomUUID()}`;
+    const isValidUUID = (val: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
+    const guestId = providedId && isValidUUID(providedId) ? providedId : randomUUID();
 
     console.log(`[guest] request id=${guestId}`);
 
@@ -133,7 +134,7 @@ router.post('/guest', async (req, res) => {
         {
           id: guestId,
           authid: guestId,
-          email: '',
+          email: null,
           number_of_credits: 0,
           bookmarks: [],
           settings: { isGuest: true },
