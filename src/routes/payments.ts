@@ -10,7 +10,8 @@ const router = Router();
 const stripeSecret = process.env.STRIPE_SECRET_KEY;
 const stripe = stripeSecret
   ? new Stripe(stripeSecret, {
-      apiVersion: '2024-12-18' as any,
+      // Use a stable, currently valid API version
+      apiVersion: '2023-10-16',
     })
   : null;
 
@@ -40,6 +41,60 @@ export const CREDIT_PACKAGES: CreditPackage[] = [
     oneTime: true,
     highlight: true,
     tagline: 'Limited one-time starter boost',
+  },
+  {
+    id: '500',
+    baseCredits: 500,
+    bonusPercent: 0,
+    totalCredits: 500,
+    price: 4.99,
+    productId: 'credits_500',
+    priceId: process.env.STRIPE_PRICE_CREDITS_500 || 'price_1SaEAjGsleA9N3wocKAUmNVX',
+  },
+  {
+    id: '1000',
+    baseCredits: 1000,
+    bonusPercent: 10,
+    totalCredits: 1100,
+    price: 9.99,
+    productId: 'credits_1000',
+    priceId: process.env.STRIPE_PRICE_CREDITS_1000 || 'price_1SaED1GsleA9N3wou7xY2ECO',
+  },
+  {
+    id: '2000',
+    baseCredits: 2000,
+    bonusPercent: 15,
+    totalCredits: 2300,
+    price: 19.99,
+    productId: 'credits_2000',
+    priceId: process.env.STRIPE_PRICE_CREDITS_2000 || 'price_1SaEE4GsleA9N3woSMToAtbj',
+  },
+  {
+    id: '3000',
+    baseCredits: 3000,
+    bonusPercent: 20,
+    totalCredits: 3600,
+    price: 29.99,
+    productId: 'credits_3000',
+    priceId: process.env.STRIPE_PRICE_CREDITS_3000 || 'price_1SaEFTGsleA9N3woQFAeFwJg',
+  },
+  {
+    id: '5000',
+    baseCredits: 5000,
+    bonusPercent: 25,
+    totalCredits: 6250,
+    price: 49.99,
+    productId: 'credits_5000',
+    priceId: process.env.STRIPE_PRICE_CREDITS_5000 || 'price_1SaEGmGsleA9N3woJQwraA5c',
+  },
+  {
+    id: '10000',
+    baseCredits: 10000,
+    bonusPercent: 30,
+    totalCredits: 13000,
+    price: 99.99,
+    productId: 'credits_10000',
+    priceId: process.env.STRIPE_PRICE_CREDITS_10000 || 'price_1SaEHsGsleA9N3woD5yxGBJR',
   },
 ];
 
