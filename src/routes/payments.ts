@@ -83,23 +83,28 @@ router.get('/packages', async (req, res) => {
 
     // If a userId is provided, filter one-time packages that were already purchased
     if (userId) {
-      const { data: userData, error } = await supabaseAdmin
-        .from('users')
-        .select('settings')
-        .eq('id', userId)
-        .single();
-
-      if (error) {
-        console.error('Failed to load user settings for packages:', error);
-        return res.status(500).json({ error: 'Failed to load packages' });
-      }
+      // Try users first, then guests
+      const fetchSettings = async (table: 'users' | 'guests') => {
+        return supabaseAdmin
+          .from(table)
+          .select('settings')
+          .eq('id', userId)
+          .maybeSingle();
+      };
 
       let userSettings: any = {};
-      if (userData?.settings) {
+      let fetched = await fetchSettings('users');
+      if (!fetched.data) {
+        fetched = await fetchSettings('guests');
+      }
+
+      if (fetched.error) {
+        console.error('Failed to load settings for packages:', fetched.error);
+      } else if (fetched.data?.settings) {
         try {
-          userSettings = typeof userData.settings === 'string'
-            ? JSON.parse(userData.settings)
-            : userData.settings;
+          userSettings = typeof fetched.data.settings === 'string'
+            ? JSON.parse(fetched.data.settings)
+            : fetched.data.settings;
         } catch (parseError) {
           console.error('Failed to parse user settings JSON:', parseError);
           userSettings = {};
@@ -201,47 +206,55 @@ router.post('/verify-purchase', async (req, res) => {
       // Continue even if acknowledgment fails - the purchase is still valid
     }
 
-    // Ensure user exists and get current credits (create if missing or on error)
-    const ensureUserRow = async () => {
+    // Ensure account exists (users first, then guests); create guest if missing
+    const ensureAccount = async () => {
       const baseProfile = {
         id: userId,
-        authid: userId,
-        email: '',
+        email: null,
         number_of_credits: 0,
         bookmarks: [],
         settings: {},
         paid_chapters: [],
       };
 
-      const selectUser = await supabaseAdmin
-        .from('users')
-        .select('number_of_credits, settings')
-        .eq('id', userId)
-        .single();
+      const fetchFrom = async (table: 'users' | 'guests') => {
+        return supabaseAdmin
+          .from(table)
+          .select('number_of_credits, settings')
+          .eq('id', userId)
+          .maybeSingle();
+      };
 
-      if (selectUser.data) {
-        return { data: selectUser.data };
-      }
+      // Try users
+      let found = await fetchFrom('users');
+      if (found.data) return { table: 'users' as const, data: found.data };
 
-      // If missing or errored, try to upsert
-      const upsert = await supabaseAdmin
-        .from('users')
+      // Try guests
+      found = await fetchFrom('guests');
+      if (found.data) return { table: 'guests' as const, data: found.data };
+
+      // Create guest
+      const created = await supabaseAdmin
+        .from('guests')
         .upsert(baseProfile, { onConflict: 'id' })
         .select('number_of_credits, settings')
         .single();
 
-      if (upsert.error || !upsert.data) {
-        console.error('Failed to fetch or create user for purchase:', selectUser.error || upsert.error);
-        return { error: upsert.error || selectUser.error };
+      if (created.error || !created.data) {
+        console.error('Failed to fetch or create account for purchase:', created.error);
+        return { error: created.error };
       }
 
-      return { data: upsert.data };
+      return { table: 'guests' as const, data: created.data };
     };
 
-    const { data: userData, error: ensureError } = await ensureUserRow();
-    if (ensureError || !userData) {
-      return res.status(500).json({ error: 'Failed to fetch or create user for purchase' });
+    const ensured = await ensureAccount();
+    if ((ensured as any).error || !ensured.data) {
+      return res.status(500).json({ error: 'Failed to fetch or create account for purchase' });
     }
+
+    const accountTable = ensured.table;
+    const userData = ensured.data;
 
     let userSettings: any = {};
     if (userData?.settings) {
@@ -279,7 +292,7 @@ router.post('/verify-purchase', async (req, res) => {
 
     // Update user credits
     const { error: updateError } = await supabaseAdmin
-      .from('users')
+      .from(accountTable)
       .update({ number_of_credits: newCredits, settings: updatedSettings })
       .eq('id', userId);
 

@@ -129,11 +129,10 @@ router.post('/guest', async (req, res) => {
     console.log(`[guest] request id=${guestId}`);
 
     const { data, error } = await supabaseAdmin
-      .from('users')
+      .from('guests')
       .upsert(
         {
           id: guestId,
-          authid: guestId,
           email: null,
           number_of_credits: 0,
           bookmarks: [],
