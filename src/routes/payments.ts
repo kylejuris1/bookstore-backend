@@ -25,16 +25,16 @@ export const CREDIT_PACKAGES = [
     price: 1.99,
     productId: 'credits_200',
     oneTime: true,
-    isConsumable: false,
+    isConsumable: false, // one-time starter, do not consume
     highlight: true,
     tagline: 'Limited one-time starter boost',
   },
-  { id: '500', baseCredits: 500, bonusPercent: 0, totalCredits: 500, price: 4.99, productId: 'credits_500' },
-  { id: '1000', baseCredits: 1000, bonusPercent: 10, totalCredits: 1100, price: 9.99, productId: 'credits_1000' },
-  { id: '2000', baseCredits: 2000, bonusPercent: 15, totalCredits: 2300, price: 19.99, productId: 'credits_2000' },
-  { id: '3000', baseCredits: 3000, bonusPercent: 20, totalCredits: 3600, price: 29.99, productId: 'credits_3000' },
-  { id: '5000', baseCredits: 5000, bonusPercent: 25, totalCredits: 6250, price: 49.99, productId: 'credits_5000' },
-  { id: '10000', baseCredits: 10000, bonusPercent: 30, totalCredits: 13000, price: 99.99, productId: 'credits_10000' },
+  { id: '500', baseCredits: 500, bonusPercent: 0, totalCredits: 500, price: 4.99, productId: 'credits_500', isConsumable: true },
+  { id: '1000', baseCredits: 1000, bonusPercent: 10, totalCredits: 1100, price: 9.99, productId: 'credits_1000', isConsumable: true },
+  { id: '2000', baseCredits: 2000, bonusPercent: 15, totalCredits: 2300, price: 19.99, productId: 'credits_2000', isConsumable: true },
+  { id: '3000', baseCredits: 3000, bonusPercent: 20, totalCredits: 3600, price: 29.99, productId: 'credits_3000', isConsumable: true },
+  { id: '5000', baseCredits: 5000, bonusPercent: 25, totalCredits: 6250, price: 49.99, productId: 'credits_5000', isConsumable: true },
+  { id: '10000', baseCredits: 10000, bonusPercent: 30, totalCredits: 13000, price: 99.99, productId: 'credits_10000', isConsumable: true },
 ];
 
 // Initialize Google Play Android Publisher API
