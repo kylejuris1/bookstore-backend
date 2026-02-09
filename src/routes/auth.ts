@@ -153,6 +153,39 @@ router.delete('/delete', async (req, res) => {
   }
 });
 
+// Get account profile by id (users first, then guests)
+router.get('/account/:id', async (req, res) => {
+  try {
+    const accountId = req.params.id;
+    if (!accountId) {
+      return res.status(400).json({ error: 'Account ID is required' });
+    }
+
+    const fetchFrom = async (table: 'users' | 'guests') => {
+      return supabaseAdmin
+        .from(table)
+        .select('id, number_of_credits, bookmarks, paid_chapters, settings')
+        .eq('id', accountId)
+        .maybeSingle();
+    };
+
+    let result = await fetchFrom('users');
+    if (result.data) {
+      return res.json({ accountType: 'user', profile: result.data });
+    }
+
+    result = await fetchFrom('guests');
+    if (result.data) {
+      return res.json({ accountType: 'guest', profile: result.data });
+    }
+
+    return res.status(404).json({ error: 'Account not found' });
+  } catch (err: any) {
+    console.error('Error fetching account:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch account' });
+  }
+});
+
 export default router;
 
 // Guest user creation
