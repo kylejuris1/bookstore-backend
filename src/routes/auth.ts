@@ -153,6 +153,71 @@ router.delete('/delete', async (req, res) => {
   }
 });
 
+// Request OTP for account deletion (no sign-in UI required)
+router.post('/delete-otp', async (req, res) => {
+  try {
+    const email = (req.body?.email as string | undefined)?.trim();
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const { error } = await supabaseAdmin.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+      },
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('Unexpected error requesting deletion OTP:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to request deletion OTP' });
+  }
+});
+
+// Verify OTP and delete account + all data (no existing session required)
+router.post('/delete-confirm', async (req, res) => {
+  try {
+    const email = (req.body?.email as string | undefined)?.trim();
+    const token = (req.body?.token as string | undefined)?.trim();
+    if (!email || !token) {
+      return res.status(400).json({ error: 'Email and token are required' });
+    }
+
+    const { data, error } = await supabaseAdmin.auth.verifyOtp({
+      email,
+      token,
+      type: 'email',
+    });
+
+    if (error || !data?.user?.id) {
+      return res.status(400).json({ error: error?.message || 'Invalid code' });
+    }
+
+    const userId = data.user.id;
+
+    // Remove profile data (best-effort)
+    await supabaseAdmin.from('users').delete().eq('id', userId);
+    await supabaseAdmin.from('guests').delete().eq('id', userId);
+
+    // Remove auth user
+    const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (deleteError) {
+      console.error('Failed to delete auth user:', deleteError);
+      return res.status(500).json({ error: deleteError.message || 'Failed to delete account' });
+    }
+
+    return res.json({ success: true, message: 'Account deleted' });
+  } catch (err: any) {
+    console.error('Unexpected error confirming deletion:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to delete account' });
+  }
+});
+
 // Get account profile by id (users first, then guests)
 router.get('/account/:id', async (req, res) => {
   try {
@@ -185,8 +250,6 @@ router.get('/account/:id', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to fetch account' });
   }
 });
-
-export default router;
 
 // Guest user creation
 router.post('/guest', async (req, res) => {
@@ -243,3 +306,4 @@ router.post('/guest', async (req, res) => {
   }
 });
 
+export default router;
