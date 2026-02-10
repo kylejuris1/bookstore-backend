@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.bookstore.harba.app",
+      "sha256_cert_fingerprints": [
+        "F7:E6:AA:4A:40:EA:ED:6B:42:E0:5B:DC:87:E0:E2:D3:CB:D8:49:B0:52:FC:72:09:FE:3A:47:1D:22:B2:E7:98"
+      ]
+    }
+  }
+]
